@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>HW4 Bonus - 智能派單視覺化系統</title>
+    <style>
+        :root {
+            --bg-color: #f0f2f5;
+            --card-bg: #ffffff;
+            --primary: #4a90e2;
+            --accent: #f5a623;
+            --danger: #e74c3c;
+            --success: #2ecc71;
+        }
+        body { font-family: "PingFang TC", "Microsoft JhengHei", sans-serif; background: var(--bg-color); display: flex; flex-direction: column; align-items: center; padding: 20px; }
+        .dashboard { background: var(--card-bg); padding: 20px; border-radius: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); width: 600px; text-align: center; margin-bottom: 20px; }
+        .stats { display: flex; justify-content: space-around; font-size: 1.2rem; font-weight: bold; margin-bottom: 15px; }
+        .gold-text { color: var(--accent); }
+        
+        .barracks-container { display: flex; gap: 20px; margin-bottom: 20px; }
+        .barrack-box { background: #34495e; color: white; width: 250px; padding: 15px; border-radius: 10px; min-height: 150px; position: relative; }
+        .barrack-box h3 { margin-top: 0; color: #ecf0f1; border-bottom: 1px solid #7f8c8d; padding-bottom: 5px; }
+        .unit-slot { background: rgba(255,255,255,0.1); margin: 5px 0; padding: 8px; border-radius: 5px; font-size: 0.9rem; animation: slideIn 0.3s ease; }
+        
+        .order-preview { background: #fff; padding: 10px; border-radius: 10px; width: 560px; margin-bottom: 20px; border-left: 5px solid var(--primary); }
+        
+        .controls { display: flex; gap: 10px; }
+        button { padding: 10px 25px; font-size: 1rem; cursor: pointer; border: none; border-radius: 5px; transition: 0.2s; color: white; }
+        .btn-start { background: var(--success); }
+        .btn-start:hover { background: #27ae60; }
+        .btn-reset { background: var(--danger); }
+        .btn-reset:hover { background: #c0392b; }
+        button:disabled { background: #bdc3c7; cursor: not-allowed; }
+
+        #logs { width: 600px; height: 150px; background: #222; color: #0f0; font-family: monospace; padding: 10px; overflow-y: auto; border-radius: 5px; font-size: 0.85rem; text-align: left; }
+
+        @keyframes slideIn { from { transform: translateX(-20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+    </style>
+</head>
+<body>
+
+    <div class="dashboard">
+        <h2>🏰 智能派單系統 (Smart Enqueue)</h2>
+        <div class="stats">
+            <div>回合: <span id="round-num">0</span></div>
+            <div class="gold-text">💰 黃金: <span id="gold-val">150</span></div>
+        </div>
+        
+        <div class="order-preview" id="current-order-box">
+            下一筆訂單：<span id="next-unit-name">準備中</span> (消耗 <span id="next-unit-cost">-</span>)
+        </div>
+
+        <div class="barracks-container">
+            <div class="barrack-box" id="barrack-a">
+                <h3>兵營 A (優先)</h3>
+                <div class="queue" id="queue-a"></div>
+            </div>
+            <div class="barrack-box" id="barrack-b">
+                <h3>兵營 B</h3>
+                <div class="queue" id="queue-b"></div>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button class="btn-start" id="start-btn" onclick="nextStep()">下一回合 (開始)</button>
+            <button class="btn-reset" onclick="resetGame()">重製</button>
+        </div>
+    </div>
+
+    <div id="logs">>> 系統就緒，點擊「下一回合」開始模擬...<br></div>
+
+<script>
+    // 初始資料
+    let player_gold = 150;
+    let round_num = 0;
+    let barracks_A = [];
+    let barracks_B = [];
+    const orders = [
+        {"unit": "劍士", "cost": 20},
+        {"unit": "弓手", "cost": 30},
+        {"unit": "騎士", "cost": 50},
+        {"unit": "投石車", "cost": 40}
+    ];
+
+    function updateUI() {
+        document.getElementById('gold-val').innerText = player_gold;
+        document.getElementById('round-num').innerText = round_num;
+        
+        // 更新訂單預覽
+        if(round_num < orders.length) {
+            document.getElementById('next-unit-name').innerText = orders[round_num].unit;
+            document.getElementById('next-unit-cost').innerText = orders[round_num].cost;
+        } else {
+            document.getElementById('current-order-box').innerText = "所有訂單已處理完畢";
+            document.getElementById('start-btn').disabled = true;
+        }
+
+        // 更新兵營 A
+        const qa = document.getElementById('queue-a');
+        qa.innerHTML = '';
+        barracks_A.forEach(item => {
+            qa.innerHTML += `<div class="unit-slot">🛡️ ${item}</div>`;
+        });
+
+        // 更新兵營 B
+        const qb = document.getElementById('queue-b');
+        qb.innerHTML = '';
+        barracks_B.forEach(item => {
+            qb.innerHTML += `<div class="unit-slot">🏹 ${item}</div>`;
+        });
+    }
+
+    function addLog(msg, color="#0f0") {
+        const logBox = document.getElementById('logs');
+        logBox.innerHTML += `<span style="color:${color}">[Round ${round_num}] ${msg}</span><br>`;
+        logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    function nextStep() {
+        if (round_num >= orders.length) return;
+
+        addLog(`--- 第 ${round_num} 回合開始 ---`, "#fff");
+
+        // 1. Dequeue 階段 (偶數回合)
+        if (round_num % 2 === 0) {
+            // A 廠
+            if (barracks_A.length > 0) {
+                let unit = barracks_A.shift();
+                addLog(`A 廠生產完成：${unit} 出列！`, "#2ecc71");
+            } else {
+                addLog(`A 廠沒東西可做 (Underflow 防護)`, "#e67e22");
+            }
+            // B 廠
+            if (barracks_B.length > 0) {
+                let unit = barracks_B.shift();
+                addLog(`B 廠生產完成：${unit} 出列！`, "#2ecc71");
+            } else {
+                addLog(`B 廠沒東西可做 (Underflow 防護)`, "#e67e22");
+            }
+        }
+
+        // 2. Enqueue 階段
+        let currentOrder = orders[round_num];
+        let unit = currentOrder.unit;
+        let cost = currentOrder.cost;
+
+        if (player_gold < cost) {
+            addLog(`黃金不足，無法生產 ${unit}`, "#e74c3c");
+        } else {
+            // Overflow 檢查 (上限 2)
+            if (barracks_A.length >= 2 && barracks_B.length >= 2) {
+                addLog(`產線全滿！ ${unit} 訂單拒絕`, "#e74c3c");
+            } else {
+                // 負載平衡
+                if (barracks_A.length <= barracks_B.length) {
+                    barracks_A.push(unit);
+                    player_gold -= cost;
+                    addLog(`${unit} 分派至 A 廠`, "#primary");
+                } else {
+                    barracks_B.push(unit);
+                    player_gold -= cost;
+                    addLog(`${unit} 分派至 B 廠`, "#primary");
+                }
+            }
+        }
+
+        round_num++;
+        updateUI();
+    }
+
+    function resetGame() {
+        player_gold = 150;
+        round_num = 0;
+        barracks_A = [];
+        barracks_B = [];
+        document.getElementById('start-btn').disabled = false;
+        document.getElementById('logs').innerHTML = ">> 系統已重製。<br>";
+        document.getElementById('current-order-box').innerHTML = `下一筆訂單：<span id="next-unit-name">準備中</span> (消耗 <span id="next-unit-cost">-</span>)`;
+        updateUI();
+    }
+
+    // 初始化介面
+    updateUI();
+</script>
+</body>
+</html>
